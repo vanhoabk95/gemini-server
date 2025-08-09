@@ -1,5 +1,5 @@
 @echo off
-echo Requesting administrator privileges...
+title Proxy Server (Admin)
 
 :: Check for admin rights and elevate if needed
 >nul 2>&1 "%SYSTEMROOT%\system32\cacls.exe" "%SYSTEMROOT%\system32\config\system"
@@ -11,16 +11,19 @@ if %errorlevel% neq 0 (
     exit /B
 )
 
-echo Starting Python Proxy Server with admin rights...
+echo ========================================
+echo    Simple Python Proxy Server
+echo ========================================
+echo.
+echo Starting server with admin privileges...
 echo Host: 0.0.0.0
 echo Port: 80
-echo Max connections: 50
+echo Max Connections: 150
 echo.
-echo Press Ctrl+C to stop the server
+echo Press Ctrl+C to stop
+echo ========================================
 echo.
 
-uv run python main.py --host 0.0.0.0 --port 80 --max-connections 50 --log-level DEBUG
+uv run python main.py
 
-echo.
-echo Server stopped
-pause 
+pause
