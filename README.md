@@ -8,6 +8,7 @@ This proxy server accepts HTTP and HTTPS requests on a specified port and forwar
 
 ## Features
 
+### HTTP/HTTPS Proxy
 - Configurable listening IP address and port
 - Support for both HTTP and HTTPS (via CONNECT method)
 - Multithreaded request handling for concurrent connections
@@ -15,7 +16,17 @@ This proxy server accepts HTTP and HTTPS requests on a specified port and forwar
 - Command-line configuration options
 - Lightweight and easy to modify
 
+### Gemini API Proxy (NEW)
+- Proxy Google Generative AI requests for clients without internet
+- Centralized API key management on server
+- Automatic model name replacement
+- Compatible with LangChain and other frameworks
+- Runs on the same port as HTTP/HTTPS proxy
+- See [GEMINI_SETUP.md](GEMINI_SETUP.md) for detailed setup instructions
+
 ## Usage
+
+### Quick Start - HTTP/HTTPS Proxy
 
 Start the proxy server with default settings:
 
@@ -28,6 +39,16 @@ Configure the proxy server with command line arguments:
 ```bash
 python main.py --host 0.0.0.0 --port 8888 --max-connections 50 --log-level INFO
 ```
+
+### Quick Start - Gemini API Proxy
+
+1. Install httpx: `pip install httpx`
+2. Copy config file: `copy gemini_config.json.example gemini_config.json`
+3. Edit `gemini_config.json` and add your Google API key
+4. Start server: `python main.py`
+5. Configure client to point to `http://your-server-ip:80`
+
+For detailed instructions, see [GEMINI_SETUP.md](GEMINI_SETUP.md)
 
 ### Client Configuration
 
@@ -72,8 +93,9 @@ The proxy server can be configured using command-line arguments:
 
 ## Requirements
 
-- Python 3.6 or higher
-- No external dependencies (uses only Python standard libraries)
+- Python 3.9 or higher
+- No external dependencies for basic HTTP/HTTPS proxy (uses only Python standard libraries)
+- For Gemini API Proxy feature: `httpx` library (install with `pip install httpx`)
 
 ## Project Structure
 
@@ -81,7 +103,9 @@ The proxy server can be configured using command-line arguments:
   - `server.py`: Server module for listening and accepting connections
   - `handler.py`: Client handler module for processing requests
   - `forwarder.py`: Forwarding module for communicating with target servers
-  - `config.py`: Configuration module for handling settings
+  - `gemini_config.py`: Gemini API configuration module
+  - `gemini_handler.py`: Gemini API request handler
   - `logger.py`: Logging module for monitoring and troubleshooting
-- `tests/`: Unit tests for the proxy server components
-- `main.py`: Entry point for the application 
+- `main.py`: Entry point for the application
+- `gemini_config.json.example`: Example configuration for Gemini API proxy
+- `GEMINI_SETUP.md`: Detailed setup guide for Gemini API proxy feature 

@@ -71,3 +71,8 @@ logs/
 
 # Service files
 *.service
+
+# Gemini API configuration (contains API key)
+gemini_config.json
+config/gemini_config.json
+.gemini_config.json

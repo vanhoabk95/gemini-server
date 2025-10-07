@@ -11,6 +11,7 @@ import select
 
 from proxy.logger import get_logger
 from proxy.forwarder import forward_request
+from proxy.gemini_handler import is_gemini_request, handle_gemini_request
 
 logger = get_logger()
 
@@ -47,14 +48,18 @@ class ClientHandler(threading.Thread):
         try:
             # Receive the client's HTTP request
             request_data = self._receive_request()
-            
+
             if not request_data:
                 logger.warning(f"Empty request from {self.client_address[0]}")
                 self._close_connection()
                 return
-            
-            # Forward the request to the target server
-            success = forward_request(self.client_socket, request_data, self.client_address)
+
+            # Check if this is a Gemini API request
+            if is_gemini_request(request_data):
+                success = handle_gemini_request(self.client_socket, request_data, self.client_address)
+            else:
+                # Forward the request to the target server (normal HTTP/HTTPS proxy)
+                success = forward_request(self.client_socket, request_data, self.client_address)
             
             if not success:
                 # Send error response to the client
