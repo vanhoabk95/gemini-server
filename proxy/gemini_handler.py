@@ -81,6 +81,15 @@ def handle_gemini_request(client_socket, request_data, client_address):
             return False
 
         logger.info(f"Gemini API request from {client_address[0]}: {method} {path}")
+        logger.debug(f"Request headers: {headers}")
+
+        # Log request body for debugging
+        if body:
+            try:
+                body_json = json.loads(body.decode('utf-8', errors='replace'))
+                logger.info(f"Request body: {json.dumps(body_json, indent=2)}")
+            except:
+                logger.debug(f"Request body (raw, first 500 chars): {body[:500]}")
 
         # Replace model in path with configured model
         path = _replace_model_in_path(path, config.get_model())
@@ -210,6 +219,16 @@ def _forward_to_google(method, path, headers, body, config):
                 'User-Agent': headers.get('User-Agent', 'Python-Proxy/1.0')
             }
 
+            # Log what we're sending to Google
+            logger.debug(f"Forwarding to URL: {url}")
+            logger.debug(f"Request headers to Google: {request_headers}")
+            if body:
+                try:
+                    body_json = json.loads(body.decode('utf-8', errors='replace'))
+                    logger.debug(f"Request body to Google: {json.dumps(body_json, indent=2)}")
+                except:
+                    logger.debug(f"Request body to Google (raw): {body[:200]}")
+
             # Make synchronous request with httpx
             with httpx.Client(timeout=60.0) as client:
                 if method == 'POST':
@@ -223,13 +242,22 @@ def _forward_to_google(method, path, headers, body, config):
                 # Check if request was successful
                 if response.status_code < 500:
                     # Success or client error (4xx) - don't retry
+                    logger.info(f"Google API response: {response.status_code} - {len(response.content)} bytes")
+
+                    # Log response body for debugging (only first part if too long)
+                    if response.status_code >= 400:
+                        try:
+                            error_json = json.loads(response.content.decode('utf-8', errors='replace'))
+                            logger.error(f"Google API error response: {json.dumps(error_json, indent=2)}")
+                        except:
+                            logger.error(f"Google API error response (raw): {response.content[:500]}")
+
                     response_data = _build_http_response(
                         response.status_code,
                         response.reason_phrase,
                         response.headers,
                         response.content
                     )
-                    logger.debug(f"Google API response: {response.status_code} - {len(response.content)} bytes")
                     return response_data
                 else:
                     # Server error (5xx) - try next config
