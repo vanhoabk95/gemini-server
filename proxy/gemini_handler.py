@@ -61,11 +61,11 @@ def handle_gemini_request(client_socket, request_data, client_address):
     config = get_gemini_config()
 
     if not config.is_enabled():
-        logger.warning(f"Gemini proxy request from {client_address[0]} but feature is disabled")
+        logger.warning(f"LLM proxy request from {client_address[0]} but feature is disabled")
         error_response = _create_error_response(
             400,
             "Bad Request",
-            "Gemini proxy is not enabled on this server"
+            "LLM Server is not enabled"
         )
         client_socket.sendall(error_response)
         return False
@@ -75,31 +75,17 @@ def handle_gemini_request(client_socket, request_data, client_address):
         method, path, headers, body = _parse_gemini_request(request_data)
 
         if not path:
-            logger.error(f"Could not parse Gemini request from {client_address[0]}")
+            logger.error(f"Could not parse LLM request from {client_address[0]}")
             error_response = _create_error_response(400, "Bad Request", "Invalid request format")
             client_socket.sendall(error_response)
             return False
 
-        logger.info(f"Gemini API request from {client_address[0]}: {method} {path}")
-        logger.debug(f"Request headers: {headers}")
-
-        # Log request body for debugging
-        if body:
-            try:
-                body_json = json.loads(body.decode('utf-8', errors='replace'))
-                logger.info(f"Request body: {json.dumps(body_json, indent=2)}")
-            except:
-                logger.debug(f"Request body (raw, first 500 chars): {body[:500]}")
+        logger.info(f"LLM API request from {client_address[0]}: {method} {path}")
 
         # Replace model in path with configured model
-        original_path = path
         path = _replace_model_in_path(path, config.get_model())
-        if original_path != path:
-            logger.info(f"Model replacement: {original_path} -> {path}")
-        else:
-            logger.debug(f"No model replacement needed for path: {path}")
 
-        # Forward to Google API
+        # Forward to LLM API
         response_data = _forward_to_google(method, path, headers, body, config)
 
         if response_data:
@@ -107,13 +93,13 @@ def handle_gemini_request(client_socket, request_data, client_address):
             client_socket.sendall(response_data)
             return True
         else:
-            error_response = _create_error_response(502, "Bad Gateway", "Failed to reach Google API")
+            error_response = _create_error_response(502, "Bad Gateway", "Failed to reach LLM server")
             client_socket.sendall(error_response)
             return False
 
     except Exception as e:
-        logger.error(f"Error handling Gemini request: {e}")
-        error_response = _create_error_response(500, "Internal Server Error", str(e))
+        logger.error(f"Error handling LLM request: {e}")
+        error_response = _create_error_response(500, "Internal Server Error", "Internal server error")
         client_socket.sendall(error_response)
         return False
 
@@ -155,7 +141,7 @@ def _parse_gemini_request(request_data):
         return method, path, headers, body
 
     except Exception as e:
-        logger.error(f"Error parsing Gemini request: {e}")
+        logger.error(f"Error parsing LLM request: {e}")
         return None, None, None, None
 
 
@@ -218,7 +204,7 @@ def _forward_to_google(method, path, headers, body, config):
             masked_key = f"***{api_key[-4:]}" if api_key and len(api_key) > 4 else "***"
 
             # Log which config we're using
-            logger.info(f"Using config #{config.get_current_index() + 1}: model={model}, api_key={masked_key}")
+            logger.info(f"Using config #{config.get_current_index() + 1}/{max_retries}: model={model}")
 
             # Build full URL
             url = f"{api_base}{path}"
@@ -235,17 +221,6 @@ def _forward_to_google(method, path, headers, body, config):
                 'User-Agent': headers.get('User-Agent', 'Python-Proxy/1.0')
             }
 
-            # Log what we're sending to Google (mask API key in URL)
-            safe_url = url.replace(api_key, masked_key)
-            logger.debug(f"Forwarding to URL: {safe_url}")
-            logger.debug(f"Request headers to Google: {request_headers}")
-            if body:
-                try:
-                    body_json = json.loads(body.decode('utf-8', errors='replace'))
-                    logger.debug(f"Request body to Google: {json.dumps(body_json, indent=2)}")
-                except:
-                    logger.debug(f"Request body to Google (raw): {body[:200]}")
-
             # Make synchronous request with httpx
             with httpx.Client(timeout=60.0) as client:
                 if method == 'POST':
@@ -253,13 +228,13 @@ def _forward_to_google(method, path, headers, body, config):
                 elif method == 'GET':
                     response = client.get(url, headers=request_headers)
                 else:
-                    logger.warning(f"Unsupported method for Gemini: {method}")
+                    logger.warning(f"Unsupported method: {method}")
                     return None
 
                 # Check if request was successful
                 if response.status_code == 200:
                     # Success
-                    logger.info(f"Google API response: {response.status_code} - {len(response.content)} bytes")
+                    logger.info(f"Response: {response.status_code} - {len(response.content)} bytes")
                     response_data = _build_http_response(
                         response.status_code,
                         response.reason_phrase,
@@ -269,14 +244,7 @@ def _forward_to_google(method, path, headers, body, config):
                     return response_data
 
                 # Any non-200 response - retry with next config
-                logger.warning(f"Google API error {response.status_code} with config #{config.get_current_index() + 1}, trying next config")
-
-                # Log error response for debugging
-                try:
-                    error_json = json.loads(response.content.decode('utf-8', errors='replace'))
-                    logger.error(f"Error response: {json.dumps(error_json, indent=2)}")
-                except:
-                    logger.error(f"Error response (raw): {response.content[:500]}")
+                logger.warning(f"Config #{config.get_current_index() + 1} failed with status {response.status_code}")
 
                 # Raise exception to trigger retry with next config
                 raise Exception(f"API error: {response.status_code}")
@@ -290,19 +258,19 @@ def _forward_to_google(method, path, headers, body, config):
             # Check if we've tried all configs
             if retry_count >= max_retries:
                 # We've tried all configs
-                logger.error(f"All {max_retries} Gemini config(s) failed")
+                logger.error(f"All {max_retries} config(s) failed")
 
                 # Return a 400 error to prevent client auto-retry
                 error_response = _create_error_response(
                     400,
                     "Bad Request",
-                    f"All configured Gemini API endpoints are currently unavailable. Tried {max_retries} config(s)."
+                    "LLM server is currently unavailable"
                 )
                 return error_response
 
             # Move to next config
             config.current_index = (config.current_index + 1) % max_retries
-            logger.info(f"Failover to Gemini config #{config.get_current_index() + 1}")
+            logger.info(f"Failover to config #{config.get_current_index() + 1}")
             # Continue loop with new config
 
     # Should not reach here, but just in case
@@ -310,7 +278,7 @@ def _forward_to_google(method, path, headers, body, config):
     error_response = _create_error_response(
         400,
         "Bad Request",
-        "All configured Gemini API endpoints are currently unavailable."
+        "LLM server is currently unavailable"
     )
     return error_response
 

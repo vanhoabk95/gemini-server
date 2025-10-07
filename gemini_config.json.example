@@ -1,12 +1,38 @@
-{
-  "enabled": true,
-  "google_api_key": "YOUR_GOOGLE_API_KEY_HERE_1",
-  "model": "gemini-2.0-flash",
-  "api_base": "https://generativelanguage.googleapis.com"
-},
-{
-  "enabled": true,
-  "google_api_key": "YOUR_GOOGLE_API_KEY_HERE_2",
-  "model": "gemini-2.5-flash-lite",
-  "api_base": "https://generativelanguage.googleapis.com"
-}
+[
+  {
+    "enabled": true,
+    "google_api_key": "YOUR_GOOGLE_API_KEY_HERE_1",
+    "model": "gemini-2.0-flash",
+    "api_base": "https://generativelanguage.googleapis.com"
+  },
+  {
+    "enabled": true,
+    "google_api_key": "YOUR_GOOGLE_API_KEY_HERE_2",
+    "model": "gemini-2.0-flash",
+    "api_base": "https://generativelanguage.googleapis.com"
+  },
+  {
+    "enabled": true,
+    "google_api_key": "YOUR_GOOGLE_API_KEY_HERE_3",
+    "model": "gemini-2.0-flash",
+    "api_base": "https://generativelanguage.googleapis.com"
+  },
+  {
+    "enabled": true,
+    "google_api_key": "YOUR_GOOGLE_API_KEY_HERE_1",
+    "model": "gemini-2.5-flash",
+    "api_base": "https://generativelanguage.googleapis.com"
+  },
+  {
+    "enabled": true,
+    "google_api_key": "YOUR_GOOGLE_API_KEY_HERE_2",
+    "model": "gemini-2.5-flash",
+    "api_base": "https://generativelanguage.googleapis.com"
+  },
+  {
+    "enabled": true,
+    "google_api_key": "YOUR_GOOGLE_API_KEY_HERE_3",
+    "model": "gemini-2.5-flash",
+    "api_base": "https://generativelanguage.googleapis.com"
+  }
+]

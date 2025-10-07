@@ -32,7 +32,7 @@ print()
 
 # Initialize LLM with proxy configuration
 llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash",  # Use any valid model name - proxy will replace with configured model
+    model="gemini-2.0-flash",  # Use any valid model name - proxy will replace with configured model
     temperature=0,
     google_api_key="dummy",    # Dummy API key - proxy server manages the real keys
     transport='rest',          # Use REST transport (required)
