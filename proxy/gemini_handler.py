@@ -63,8 +63,8 @@ def handle_gemini_request(client_socket, request_data, client_address):
     if not config.is_enabled():
         logger.warning(f"Gemini proxy request from {client_address[0]} but feature is disabled")
         error_response = _create_error_response(
-            503,
-            "Service Unavailable",
+            400,
+            "Bad Request",
             "Gemini proxy is not enabled on this server"
         )
         client_socket.sendall(error_response)
@@ -81,18 +81,12 @@ def handle_gemini_request(client_socket, request_data, client_address):
             return False
 
         logger.info(f"Gemini API request from {client_address[0]}: {method} {path}")
-        logger.debug(f"Request headers: {headers}")
-
-        # Log request body for debugging
-        if body:
-            try:
-                body_json = json.loads(body.decode('utf-8', errors='replace'))
-                logger.info(f"Request body: {json.dumps(body_json, indent=2)}")
-            except:
-                logger.debug(f"Request body (raw, first 500 chars): {body[:500]}")
 
         # Replace model in path with configured model
+        original_path = path
         path = _replace_model_in_path(path, config.get_model())
+        if original_path != path:
+            logger.debug(f"Model replacement: {original_path} -> {path}")
 
         # Forward to Google API
         response_data = _forward_to_google(method, path, headers, body, config)
@@ -171,9 +165,6 @@ def _replace_model_in_path(path, target_model):
 
     new_path = re.sub(pattern, replacement, path)
 
-    if new_path != path:
-        logger.debug(f"Replaced model in path: {path} -> {new_path}")
-
     return new_path
 
 
@@ -200,34 +191,38 @@ def _forward_to_google(method, path, headers, body, config):
 
     # Remember starting config index for failover
     start_index = config.get_current_index()
+    max_retries = config.get_config_count()
+    retry_count = 0
 
     # Try with current config and failover to next if needed
-    while True:
+    while retry_count < max_retries:
         try:
+            # Get current config details
+            current_config = config.get_current_config()
+            api_key = config.get_api_key()
+            model = config.get_model()
+            api_base = config.get_api_base()
+
+            # Mask API key for logging
+            masked_key = f"***{api_key[-4:]}" if api_key and len(api_key) > 4 else "***"
+
+            # Log which config we're using
+            logger.debug(f"Using config #{config.get_current_index() + 1}: model={model}, api_key={masked_key}")
+
             # Build full URL
-            url = f"{config.get_api_base()}{path}"
+            url = f"{api_base}{path}"
 
             # Add API key as query parameter
             if '?' in url:
-                url += f"&key={config.get_api_key()}"
+                url += f"&key={api_key}"
             else:
-                url += f"?key={config.get_api_key()}"
+                url += f"?key={api_key}"
 
             # Prepare headers
             request_headers = {
                 'Content-Type': headers.get('Content-Type', 'application/json'),
                 'User-Agent': headers.get('User-Agent', 'Python-Proxy/1.0')
             }
-
-            # Log what we're sending to Google
-            logger.debug(f"Forwarding to URL: {url}")
-            logger.debug(f"Request headers to Google: {request_headers}")
-            if body:
-                try:
-                    body_json = json.loads(body.decode('utf-8', errors='replace'))
-                    logger.debug(f"Request body to Google: {json.dumps(body_json, indent=2)}")
-                except:
-                    logger.debug(f"Request body to Google (raw): {body[:200]}")
 
             # Make synchronous request with httpx
             with httpx.Client(timeout=60.0) as client:
@@ -240,18 +235,9 @@ def _forward_to_google(method, path, headers, body, config):
                     return None
 
                 # Check if request was successful
-                if response.status_code < 500:
-                    # Success or client error (4xx) - don't retry
-                    logger.info(f"Google API response: {response.status_code} - {len(response.content)} bytes")
-
-                    # Log response body for debugging (only first part if too long)
-                    if response.status_code >= 400:
-                        try:
-                            error_json = json.loads(response.content.decode('utf-8', errors='replace'))
-                            logger.error(f"Google API error response: {json.dumps(error_json, indent=2)}")
-                        except:
-                            logger.error(f"Google API error response (raw): {response.content[:500]}")
-
+                if response.status_code == 200:
+                    # Success
+                    logger.info(f"Success: {response.status_code} - {len(response.content)} bytes")
                     response_data = _build_http_response(
                         response.status_code,
                         response.reason_phrase,
@@ -259,22 +245,43 @@ def _forward_to_google(method, path, headers, body, config):
                         response.content
                     )
                     return response_data
-                else:
-                    # Server error (5xx) - try next config
-                    logger.warning(f"Google API error {response.status_code}, trying next config")
-                    raise Exception(f"Server error: {response.status_code}")
+
+                # Any non-200 response - retry with next config
+                logger.warning(f"Config #{config.get_current_index() + 1} failed with {response.status_code}, trying next")
+
+                # Raise exception to trigger retry with next config
+                raise Exception(f"API error: {response.status_code}")
 
         except Exception as e:
-            logger.warning(f"Error with config #{config.get_current_index() + 1}: {e}")
+            # Increment retry counter
+            retry_count += 1
 
-            # Try to move to next config
-            if not config.try_next_config(start_index):
+            # Check if we've tried all configs
+            if retry_count >= max_retries:
                 # We've tried all configs
-                logger.error("All Gemini configs failed")
-                return None
+                logger.error(f"All {max_retries} config(s) failed")
 
-            logger.info(f"Trying Gemini config #{config.get_current_index() + 1}")
+                # Return a 400 error to prevent client auto-retry
+                error_response = _create_error_response(
+                    400,
+                    "Bad Request",
+                    f"All configured Gemini API endpoints are currently unavailable. Tried {max_retries} config(s)."
+                )
+                return error_response
+
+            # Move to next config
+            config.current_index = (config.current_index + 1) % max_retries
+            logger.info(f"Failover to config #{config.get_current_index() + 1}")
             # Continue loop with new config
+
+    # Should not reach here, but just in case
+    logger.error("Unexpected: exited retry loop")
+    error_response = _create_error_response(
+        400,
+        "Bad Request",
+        "All configured Gemini API endpoints are currently unavailable."
+    )
+    return error_response
 
 
 def _build_http_response(status_code, reason, headers, body):
@@ -295,8 +302,8 @@ def _build_http_response(status_code, reason, headers, body):
 
     # Headers
     for key, value in headers.items():
-        # Skip certain headers
-        if key.lower() in ['transfer-encoding', 'connection']:
+        # Skip certain headers that are not valid or already handled
+        if key.lower() in ['transfer-encoding', 'connection', 'content-encoding']:
             continue
         response += f"{key}: {value}\r\n".encode('utf-8')
 
