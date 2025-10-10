@@ -8,6 +8,7 @@ Supports multiple configurations with automatic failover.
 import os
 import json
 from pathlib import Path
+from datetime import datetime
 
 
 class GeminiConfig:
@@ -27,9 +28,11 @@ class GeminiConfig:
         self.configs = []  # List of config dicts
         self.current_index = 0  # Current active config index
         self.enabled = False
+        self.config_file_path = None  # Store config file path for saving
 
         # Load from config file if provided
         if config_file and Path(config_file).exists():
+            self.config_file_path = config_file
             self._load_from_file(config_file)
 
         # Override with environment variables if set
@@ -98,6 +101,13 @@ class GeminiConfig:
                     cfg['model'] = self.DEFAULT_MODEL
                 if 'api_base' not in cfg:
                     cfg['api_base'] = self.DEFAULT_API_BASE
+                # Initialize status fields if not present
+                if 'status' not in cfg:
+                    cfg['status'] = 'unknown'
+                if 'last_check' not in cfg:
+                    cfg['last_check'] = None
+                if 'error_message' not in cfg:
+                    cfg['error_message'] = None
                 valid_configs.append(cfg)
 
         self.configs = valid_configs
@@ -188,6 +198,92 @@ class GeminiConfig:
         """Get current configuration index (0-based)."""
         return self.current_index
 
+    def update_status(self, index=None, status='unknown', error_message=None, auto_save=True):
+        """
+        Update the status of a configuration.
+
+        Args:
+            index (int, optional): Config index to update. If None, uses current_index
+            status (str): Status value (e.g., 'healthy', 'failed', 'timeout', 'rate_limited')
+            error_message (str, optional): Error message if status is failed
+            auto_save (bool): Automatically save to file after update (default: True)
+        """
+        if index is None:
+            index = self.current_index
+
+        if 0 <= index < len(self.configs):
+            self.configs[index]['status'] = status
+            self.configs[index]['last_check'] = datetime.now().isoformat()
+            self.configs[index]['error_message'] = error_message
+
+            # Auto-save to file if enabled
+            if auto_save and self.config_file_path:
+                self.save_to_file()
+
+    def save_to_file(self, file_path=None):
+        """
+        Save current configuration (including status) back to JSON file.
+
+        Args:
+            file_path (str, optional): Path to save to. If None, uses original config_file_path
+        """
+        save_path = file_path or self.config_file_path
+
+        if not save_path:
+            # Use logging if available, otherwise print
+            try:
+                from proxy.logger import get_logger
+                logger = get_logger()
+                logger.debug("No config file path specified, cannot save status")
+            except:
+                print("WARNING: No config file path specified, cannot save status")
+            return False
+
+        try:
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(self.configs, f, indent=2, ensure_ascii=False)
+
+            # Log success if logger available
+            try:
+                from proxy.logger import get_logger
+                logger = get_logger()
+                logger.debug(f"Config status saved to {save_path}")
+            except:
+                pass
+
+            return True
+        except Exception as e:
+            # Use logging if available, otherwise print
+            try:
+                from proxy.logger import get_logger
+                logger = get_logger()
+                logger.error(f"Error saving config to file: {e}")
+            except:
+                print(f"Error saving config to file: {e}")
+            return False
+
+    def get_status(self, index=None):
+        """
+        Get the status of a configuration.
+
+        Args:
+            index (int, optional): Config index. If None, uses current_index
+
+        Returns:
+            dict: Status info with keys: status, last_check, error_message
+        """
+        if index is None:
+            index = self.current_index
+
+        if 0 <= index < len(self.configs):
+            cfg = self.configs[index]
+            return {
+                'status': cfg.get('status', 'unknown'),
+                'last_check': cfg.get('last_check'),
+                'error_message': cfg.get('error_message')
+            }
+        return None
+
     def __str__(self):
         """String representation of config."""
         if not self.is_enabled():
@@ -197,6 +293,13 @@ class GeminiConfig:
         api_key = cfg.get('google_api_key', '')
         masked_key = '***' + api_key[-4:] if api_key and len(api_key) > 4 else 'Not set'
 
+        status_info = self.get_status()
+        status_str = f"  Status: {status_info['status']}"
+        if status_info['last_check']:
+            status_str += f" (checked: {status_info['last_check']})"
+        if status_info['error_message']:
+            status_str += f"\n  Error: {status_info['error_message']}"
+
         return (
             f"Gemini Proxy Config:\n"
             f"  Enabled: {self.enabled}\n"
@@ -204,7 +307,8 @@ class GeminiConfig:
             f"  Current Config: #{self.current_index + 1}\n"
             f"  Model: {cfg.get('model', self.DEFAULT_MODEL)}\n"
             f"  API Base: {cfg.get('api_base', self.DEFAULT_API_BASE)}\n"
-            f"  API Key: {masked_key}"
+            f"  API Key: {masked_key}\n"
+            f"{status_str}"
         )
 
 

@@ -76,3 +76,5 @@ logs/
 gemini_config.json
 config/gemini_config.json
 .gemini_config.json
+
+.claude/

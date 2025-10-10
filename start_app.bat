@@ -24,7 +24,15 @@ if not exist "main.py" (
 echo Activating virtual environment...
 call .venv\Scripts\activate.bat
 
-echo Virtual environment activated. Starting PythonServer...
-echo Running: python main.py --host 0.0.0.0 --port 80 --max-connections 300
+echo Virtual environment activated. Starting Proxy Server...
+echo Running: python main.py
+echo.
+echo Server configuration:
+echo   - Host: 0.0.0.0
+echo   - Port: 80
+echo   - Max Connections: 1000
+echo   - Log Directory: logs/
+echo   - Daily log rotation enabled
+echo.
 
-python main.py --host 0.0.0.0 --port 80 --max-connections 300
+python main.py

@@ -2,13 +2,11 @@
 Forwarding module for the proxy server.
 
 This module handles establishing connections to target servers, forwarding
-requests, and relaying responses back to clients.
+requests, and relaying responses back to clients asynchronously.
 """
 
-import socket
-import select
+import asyncio
 from urllib.parse import urlparse
-import time
 import logging
 
 from proxy.logger import get_logger
@@ -87,180 +85,165 @@ def parse_request(request_data):
         return None, None, None, None, None, None
 
 
-def create_https_tunnel(client_socket, host, port, client_address):
+async def create_https_tunnel(client_reader, client_writer, host, port, client_address):
     """
     Create an HTTPS tunnel for CONNECT requests.
-    
+
     Args:
-        client_socket (socket.socket): The client socket
+        client_reader (asyncio.StreamReader): The client stream reader
+        client_writer (asyncio.StreamWriter): The client stream writer
         host (str): The target host
         port (int): The target port
         client_address (tuple): The client's address (ip, port)
-        
+
     Returns:
         bool: True if tunneling was successful, False otherwise
     """
     try:
         # Log the CONNECT request
         logger.info(f"HTTPS CONNECT request from {client_address[0]} to {host}:{port}")
-        
-        # Create a socket to connect to the target server
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.settimeout(CONNECTION_TIMEOUT)
-        
+
         # Connect to the target server
-        server_socket.connect((host, port))
-        
+        server_reader, server_writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port),
+            timeout=CONNECTION_TIMEOUT
+        )
+
         # Send a 200 Connection Established response to the client
         success_response = b"HTTP/1.1 200 Connection Established\r\n\r\n"
-        client_socket.sendall(success_response)
-        
+        client_writer.write(success_response)
+        await client_writer.drain()
+
         # Set up bidirectional communication
-        tunnel_active = True
-        client_socket.setblocking(False)
-        server_socket.setblocking(False)
-        
-        while tunnel_active:
-            # Lists of sockets we want to read from and write to
-            read_sockets = [client_socket, server_socket]
-            write_sockets = []
-            error_sockets = [client_socket, server_socket]
-            
+        async def pipe(reader, writer):
             try:
-                # Use select to wait for data on any socket
-                # Reduce the timeout to 0.5 seconds to prevent long blocking
-                readable, writable, errored = select.select(read_sockets, write_sockets, error_sockets, 0.5)
-                
-                # No activity detected during the timeout period
-                if not readable and not writable and not errored:
-                    # Add a brief sleep to avoid high CPU usage in case of continuous timeouts
-                    time.sleep(0.01)
-                    continue
-                
-                # Check for data from client
-                if client_socket in readable:
-                    data = client_socket.recv(BUFFER_SIZE)
+                while True:
+                    data = await reader.read(BUFFER_SIZE)
                     if not data:
-                        tunnel_active = False
                         break
-                    server_socket.sendall(data)
-                
-                # Check for data from server
-                if server_socket in readable:
-                    data = server_socket.recv(BUFFER_SIZE)
-                    if not data:
-                        tunnel_active = False
-                        break
-                    client_socket.sendall(data)
-                
-                # Check for errors
-                if client_socket in errored or server_socket in errored:
-                    tunnel_active = False
-                    break
-                    
-            except socket.error:
-                tunnel_active = False
-                break
-        
-        server_socket.close()
-        # This message is too verbose for normal operation - commented out to reduce log spam
-        # logger.debug(f"HTTPS tunnel to {host}:{port} closed")
+                    writer.write(data)
+                    await writer.drain()
+            except Exception:
+                pass
+            finally:
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+
+        # Run both directions concurrently
+        await asyncio.gather(
+            pipe(client_reader, server_writer),
+            pipe(server_reader, client_writer),
+            return_exceptions=True
+        )
+
         return True
-        
-    except socket.gaierror:
-        logger.error(f"Could not resolve hostname: {host}")
-        error_response = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
-        client_socket.sendall(error_response)
-        return False
-    except socket.timeout:
+
+    except asyncio.TimeoutError:
         logger.error(f"Connection timeout to {host}:{port}")
         error_response = b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\n\r\n"
-        client_socket.sendall(error_response)
+        client_writer.write(error_response)
+        await client_writer.drain()
         return False
     except ConnectionRefusedError:
         logger.error(f"Connection refused by {host}:{port}")
         error_response = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
-        client_socket.sendall(error_response)
+        client_writer.write(error_response)
+        await client_writer.drain()
+        return False
+    except OSError as e:
+        logger.error(f"Could not resolve hostname: {host}")
+        error_response = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
+        client_writer.write(error_response)
+        await client_writer.drain()
         return False
     except Exception as e:
         logger.error(f"Error creating HTTPS tunnel to {host}:{port}: {e}")
         error_response = b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
-        client_socket.sendall(error_response)
+        client_writer.write(error_response)
+        await client_writer.drain()
         return False
 
 
-def forward_request(client_socket, request_data, client_address):
+async def forward_request(client_reader, client_writer, request_data, client_address):
     """
     Forward the client's request to the target server and relay the response.
-    
+
     Args:
-        client_socket (socket.socket): The client socket
+        client_reader (asyncio.StreamReader): The client stream reader
+        client_writer (asyncio.StreamWriter): The client stream writer
         request_data (bytes): The raw request data from the client
         client_address (tuple): The client's address (ip, port)
-        
+
     Returns:
         bool: True if the forwarding was successful, False otherwise
     """
     method, url, host, port, path, headers = parse_request(request_data)
-    
+
     if not host:
         logger.error(f"Could not determine host from request: {request_data[:100]}")
         return False
-    
+
     # Detect and prevent proxy loops - check if the request is to the proxy itself
     # Check if the target host matches the client's IP (indicating a potential loop)
     if host == client_address[0]:
         logger.warning(f"Detected potential proxy loop: request from {client_address[0]} to itself ({host}:{port})")
         error_response = b"HTTP/1.1 508 Loop Detected\r\nContent-Type: text/html\r\nContent-Length: 108\r\n\r\n"
         error_response += b"<html><body><h1>508 Loop Detected</h1><p>Request blocked to prevent a proxy loop.</p></body></html>"
-        client_socket.sendall(error_response)
+        client_writer.write(error_response)
+        await client_writer.drain()
         return False
-    
+
     # Handle CONNECT method for HTTPS
     if method == 'CONNECT':
-        return create_https_tunnel(client_socket, host, port, client_address)
-    
+        return await create_https_tunnel(client_reader, client_writer, host, port, client_address)
+
     # Regular HTTP request
     logger.info(f"Request from {client_address[0]}: {method} {host}:{port}{path}")
-    
+
     try:
         # Connect to the target server
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.settimeout(CONNECTION_TIMEOUT)
-        server_socket.connect((host, port))
-        
+        server_reader, server_writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port),
+            timeout=CONNECTION_TIMEOUT
+        )
+
         # Send the original request to the target server
-        server_socket.sendall(request_data)
-        
+        server_writer.write(request_data)
+        await server_writer.drain()
+
         # Receive the response from the target server
         response_data = b''
         while True:
             try:
-                data = server_socket.recv(BUFFER_SIZE)
+                data = await asyncio.wait_for(server_reader.read(BUFFER_SIZE), timeout=CONNECTION_TIMEOUT)
                 if not data:
                     break
                 response_data += data
                 # Forward the data to the client immediately
-                client_socket.sendall(data)
-            except socket.timeout:
+                client_writer.write(data)
+                await client_writer.drain()
+            except asyncio.TimeoutError:
                 break
-        
-        # Log details at appropriate level (INFO for requests, DEBUG for response size)
-        
+
         # Reduce verbosity by making this debug-level response size log conditional on log level
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Response from {host}:{port} - Size: {len(response_data)} bytes")
-        server_socket.close()
+
+        server_writer.close()
+        await server_writer.wait_closed()
         return True
-        
-    except socket.gaierror:
-        logger.error(f"Could not resolve hostname: {host}")
-        return False
-    except socket.timeout:
+
+    except asyncio.TimeoutError:
         logger.error(f"Connection timeout to {host}:{port}")
         return False
     except ConnectionRefusedError:
         logger.error(f"Connection refused by {host}:{port}")
+        return False
+    except OSError as e:
+        logger.error(f"Could not resolve hostname: {host}")
         return False
     except Exception as e:
         logger.error(f"Error forwarding request to {host}:{port}: {e}")

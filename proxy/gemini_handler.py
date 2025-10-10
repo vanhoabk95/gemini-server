@@ -6,7 +6,7 @@ This module handles requests to the Gemini API proxy.
 
 import re
 import json
-import socket
+import asyncio
 from urllib.parse import urlencode
 
 from proxy.logger import get_logger
@@ -46,12 +46,12 @@ def is_gemini_request(request_data):
         return False
 
 
-def handle_gemini_request(client_socket, request_data, client_address):
+async def handle_gemini_request(writer, request_data, client_address):
     """
     Handle a Gemini API request.
 
     Args:
-        client_socket (socket.socket): The client socket
+        writer (asyncio.StreamWriter): The client stream writer
         request_data (bytes): The raw request data
         client_address (tuple): The client's address
 
@@ -67,7 +67,8 @@ def handle_gemini_request(client_socket, request_data, client_address):
             "Bad Request",
             "LLM Server is not enabled"
         )
-        client_socket.sendall(error_response)
+        writer.write(error_response)
+        await writer.drain()
         return False
 
     try:
@@ -77,7 +78,8 @@ def handle_gemini_request(client_socket, request_data, client_address):
         if not path:
             logger.error(f"Could not parse LLM request from {client_address[0]}")
             error_response = _create_error_response(400, "Bad Request", "Invalid request format")
-            client_socket.sendall(error_response)
+            writer.write(error_response)
+            await writer.drain()
             return False
 
         logger.info(f"LLM API request from {client_address[0]}: {method} {path}")
@@ -86,21 +88,24 @@ def handle_gemini_request(client_socket, request_data, client_address):
         path = _replace_model_in_path(path, config.get_model())
 
         # Forward to LLM API
-        response_data = _forward_to_google(method, path, headers, body, config)
+        response_data = await _forward_to_google(method, path, headers, body, config)
 
         if response_data:
             # Send response back to client
-            client_socket.sendall(response_data)
+            writer.write(response_data)
+            await writer.drain()
             return True
         else:
             error_response = _create_error_response(502, "Bad Gateway", "Failed to reach LLM server")
-            client_socket.sendall(error_response)
+            writer.write(error_response)
+            await writer.drain()
             return False
 
     except Exception as e:
         logger.error(f"Error handling LLM request: {e}")
         error_response = _create_error_response(500, "Internal Server Error", "Internal server error")
-        client_socket.sendall(error_response)
+        writer.write(error_response)
+        await writer.drain()
         return False
 
 
@@ -165,7 +170,7 @@ def _replace_model_in_path(path, target_model):
     return new_path
 
 
-def _forward_to_google(method, path, headers, body, config):
+async def _forward_to_google(method, path, headers, body, config):
     """
     Forward the request to Google API with automatic failover.
 
@@ -221,19 +226,20 @@ def _forward_to_google(method, path, headers, body, config):
                 'User-Agent': headers.get('User-Agent', 'Python-Proxy/1.0')
             }
 
-            # Make synchronous request with httpx
-            with httpx.Client(timeout=60.0) as client:
+            # Make asynchronous request with httpx
+            async with httpx.AsyncClient(timeout=60.0) as client:
                 if method == 'POST':
-                    response = client.post(url, content=body, headers=request_headers)
+                    response = await client.post(url, content=body, headers=request_headers)
                 elif method == 'GET':
-                    response = client.get(url, headers=request_headers)
+                    response = await client.get(url, headers=request_headers)
                 else:
                     logger.warning(f"Unsupported method: {method}")
                     return None
 
                 # Check if request was successful
                 if response.status_code == 200:
-                    # Success
+                    # Success - update status to healthy
+                    config.update_status(status='healthy', error_message=None)
                     logger.info(f"Response: {response.status_code} - {len(response.content)} bytes")
                     response_data = _build_http_response(
                         response.status_code,
@@ -246,11 +252,28 @@ def _forward_to_google(method, path, headers, body, config):
                 # Any non-200 response - retry with next config
                 logger.warning(f"Config #{config.get_current_index() + 1} failed with status {response.status_code}")
 
+                # Update status based on error code
+                if response.status_code == 429:
+                    config.update_status(status='rate_limited', error_message=f"Rate limited: {response.status_code}")
+                elif response.status_code >= 500:
+                    config.update_status(status='server_error', error_message=f"Server error: {response.status_code}")
+                else:
+                    config.update_status(status='failed', error_message=f"API error: {response.status_code}")
+
                 # Raise exception to trigger retry with next config
                 raise Exception(f"API error: {response.status_code}")
 
         except Exception as e:
             logger.warning(f"Error with config #{config.get_current_index() + 1}: {e}")
+
+            # Update status based on exception type
+            error_str = str(e).lower()
+            if 'timeout' in error_str:
+                config.update_status(status='timeout', error_message=str(e))
+            elif 'connection' in error_str:
+                config.update_status(status='connection_error', error_message=str(e))
+            else:
+                config.update_status(status='failed', error_message=str(e))
 
             # Increment retry counter
             retry_count += 1
