@@ -7,6 +7,7 @@ import sys
 import asyncio
 from proxy.logger import setup_logger
 from proxy.server import ProxyServer
+from proxy.request_stats import get_request_stats
 
 
 class SimpleConfig:
@@ -18,6 +19,8 @@ class SimpleConfig:
         self.log_level = 'INFO'
         self.log_dir = 'logs'  # Directory for log files
         self.enable_file_logging = True  # Enable daily log rotation
+        self.stats_dir = 'stats'  # Directory for request statistics
+        self.stats_auto_save_interval = 60  # Auto-save stats every 60 seconds
 
     def __str__(self):
         return (f"Proxy Server Starting:\n"
@@ -37,6 +40,13 @@ async def async_main():
 
     logger.info(config)
 
+    # Initialize request statistics tracking
+    stats = await get_request_stats(
+        stats_dir=config.stats_dir,
+        auto_save_interval=config.stats_auto_save_interval
+    )
+    logger.info(f"Request statistics tracking enabled: {config.stats_dir}/")
+
     proxy_server = ProxyServer(config)
 
     try:
@@ -44,9 +54,11 @@ async def async_main():
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
         await proxy_server.stop()
+        await stats.stop()
     except Exception as e:
         logger.error(f"Error: {e}")
         await proxy_server.stop()
+        await stats.stop()
         return 1
 
     return 0

@@ -9,6 +9,7 @@ import asyncio
 from proxy.logger import get_logger
 from proxy.forwarder import forward_request
 from proxy.gemini_handler import is_gemini_request, handle_gemini_request
+from proxy.request_stats import get_request_stats_sync
 
 logger = get_logger()
 
@@ -26,20 +27,28 @@ async def handle_client(reader, writer):
         writer (asyncio.StreamWriter): The client stream writer
     """
     client_address = writer.get_extra_info('peername')
+    ip_address = client_address[0] if client_address else 'unknown'
+    request_type = 'http'
+    success = False
 
     try:
         # Receive the client's HTTP request
         request_data = await _receive_request(reader)
 
         if not request_data:
-            logger.warning(f"Empty request from {client_address[0]}")
+            logger.warning(f"Empty request from {ip_address}")
             await _close_connection(writer)
             return
 
-        # Check if this is a Gemini API request
+        # Detect request type
         if is_gemini_request(request_data):
+            request_type = 'gemini'
             success = await handle_gemini_request(writer, request_data, client_address)
         else:
+            # Detect HTTPS (CONNECT method)
+            if request_data.startswith(b'CONNECT '):
+                request_type = 'https'
+
             # Forward the request to the target server (normal HTTP/HTTPS proxy)
             success = await forward_request(reader, writer, request_data, client_address)
 
@@ -58,13 +67,24 @@ async def handle_client(reader, writer):
             await writer.drain()
 
     except asyncio.TimeoutError:
-        logger.warning(f"Client connection timed out: {client_address[0]}")
+        logger.warning(f"Client connection timed out: {ip_address}")
+        success = False
     except ConnectionResetError:
-        logger.warning(f"Client connection reset: {client_address[0]}")
+        logger.warning(f"Client connection reset: {ip_address}")
+        success = False
     except Exception as e:
         logger.error(f"Error handling client request: {e}")
+        success = False
 
     finally:
+        # Track request statistics
+        stats = get_request_stats_sync()
+        if stats:
+            try:
+                await stats.track_request(ip_address, request_type, success)
+            except Exception as e:
+                logger.debug(f"Error tracking request stats: {e}")
+
         await _close_connection(writer)
 
 
