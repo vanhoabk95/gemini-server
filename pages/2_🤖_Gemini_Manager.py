@@ -4,15 +4,17 @@ Gemini Manager Page - Manage Gemini API Configurations
 View, add, edit, and delete Gemini API configurations.
 """
 
-import streamlit as st
 import json
-from pathlib import Path
-from datetime import datetime
-import sys
 import os
+import sys
+from datetime import datetime
+from pathlib import Path
 
-# Add parent directory to path to import proxy modules
+# Add parent directory to path FIRST (before other imports)
 sys.path.insert(0, os.path.abspath('.'))
+
+import plotly.graph_objects as go
+import streamlit as st
 
 from proxy.gemini_usage_tracker import (
     get_today_usage,
@@ -20,7 +22,6 @@ from proxy.gemini_usage_tracker import (
     get_usage_stats,
     reset_today_usage
 )
-import plotly.graph_objects as go
 
 st.set_page_config(
     page_title="Gemini Manager - Proxy Dashboard",
@@ -145,6 +146,70 @@ if configs:
 
 st.divider()
 
+# Combined Usage Chart for all configs
+if configs:
+    st.subheader("📈 Usage Trends (Last 30 Days)")
+
+    # Aggregate data for all configs
+    all_lines_data = {}
+    for idx, cfg in enumerate(configs):
+        usage_data = get_usage_range(idx, days=30)
+        if usage_data:
+            all_lines_data[f"Config #{idx + 1}"] = usage_data
+
+    if all_lines_data:
+        # Create line chart
+        fig = go.Figure()
+
+        for config_name, usage_data in all_lines_data.items():
+            dates = list(usage_data.keys())
+            success_counts = [d['success'] for d in usage_data.values()]
+
+            fig.add_trace(go.Scatter(
+                name=config_name,
+                x=dates,
+                y=success_counts,
+                mode='lines+markers',
+                line=dict(width=2),
+                marker=dict(size=6)
+            ))
+
+        fig.update_layout(
+            xaxis_title="Date",
+            yaxis_title="Successful Requests",
+            height=400,
+            hovermode='x unified',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            ),
+            margin=dict(l=0, r=0, t=30, b=0)
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Summary stats below chart
+        col_summary1, col_summary2, col_summary3 = st.columns(3)
+        with col_summary1:
+            total_30d = sum(sum(d.get('success', 0) for d in usage.values())
+                            for usage in all_lines_data.values())
+            st.metric("Total Requests (30 days)", f"{total_30d:,}")
+        with col_summary2:
+            avg_daily = total_30d / 30 if total_30d > 0 else 0
+            st.metric("Avg Daily Requests", f"{avg_daily:.0f}")
+        with col_summary3:
+            if all_lines_data:
+                most_active = max(all_lines_data.items(),
+                                 key=lambda x: sum(d.get('success', 0) for d in x[1].values()))
+                st.metric("Most Active Config", most_active[0])
+    else:
+        st.info("No usage history available yet")
+
+st.divider()
+
 # Display existing configs
 if configs:
     st.subheader("🔑 API Key Configurations")
@@ -208,6 +273,18 @@ if configs:
                         st.metric("Success Rate", f"{success_rate:.1f}%")
                     else:
                         st.metric("Success Rate", "N/A")
+
+                # Show 30-day stats
+                st.markdown("---")
+                st.markdown("**30-Day Summary:**")
+                stats_30d = get_usage_stats(idx, days=30)
+                col_s1, col_s2, col_s3 = st.columns(3)
+                with col_s1:
+                    st.metric("Avg Daily", f"{stats_30d['avg_daily_success']:.0f}")
+                with col_s2:
+                    st.metric("Total", f"{stats_30d['total_requests']:,}")
+                with col_s3:
+                    st.metric("Success Rate", f"{stats_30d['success_rate']:.1f}%")
 
             with col_actions:
                 st.markdown("**Actions:**")
@@ -289,74 +366,6 @@ if configs:
                     if cancel:
                         st.session_state.pop(f'editing_{idx}')
                         st.rerun()
-
-            # Usage history chart
-            st.markdown("---")
-            st.markdown("**📈 Usage History (Last 30 Days)**")
-
-            usage_data = get_usage_range(idx, days=30)
-
-            if usage_data and len(usage_data) > 0:
-                dates = list(usage_data.keys())
-                success_counts = [d['success'] for d in usage_data.values()]
-                failed_counts = [d['failed'] for d in usage_data.values()]
-
-                fig = go.Figure()
-
-                # Add success bars
-                fig.add_trace(go.Bar(
-                    name='Success',
-                    x=dates,
-                    y=success_counts,
-                    marker_color='lightgreen'
-                ))
-
-                # Add failed bars
-                fig.add_trace(go.Bar(
-                    name='Failed',
-                    x=dates,
-                    y=failed_counts,
-                    marker_color='lightcoral'
-                ))
-
-                # Add daily limit line
-                daily_limit = config.get('daily_limit', 1000)
-                fig.add_trace(go.Scatter(
-                    name='Daily Limit',
-                    x=dates,
-                    y=[daily_limit] * len(dates),
-                    mode='lines',
-                    line=dict(color='orange', dash='dash', width=2)
-                ))
-
-                fig.update_layout(
-                    barmode='stack',
-                    height=350,
-                    xaxis_title="Date",
-                    yaxis_title="Requests",
-                    legend=dict(
-                        orientation="h",
-                        yanchor="bottom",
-                        y=1.02,
-                        xanchor="right",
-                        x=1
-                    ),
-                    margin=dict(l=0, r=0, t=30, b=0)
-                )
-
-                st.plotly_chart(fig)
-
-                # Show 30-day stats
-                stats_30d = get_usage_stats(idx, days=30)
-                col_s1, col_s2, col_s3 = st.columns(3)
-                with col_s1:
-                    st.metric("Avg Daily Success", f"{stats_30d['avg_daily_success']:.0f}")
-                with col_s2:
-                    st.metric("30-Day Total", f"{stats_30d['total_requests']:,}")
-                with col_s3:
-                    st.metric("30-Day Success Rate", f"{stats_30d['success_rate']:.1f}%")
-            else:
-                st.info("No usage history available yet")
 
     st.divider()
 

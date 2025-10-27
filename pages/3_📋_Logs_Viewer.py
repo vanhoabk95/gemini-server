@@ -4,10 +4,11 @@ Logs Viewer Page - View and Search Log Files
 Browse, search, and filter proxy server log files.
 """
 
-import streamlit as st
-from pathlib import Path
-from datetime import datetime
 import re
+from datetime import datetime
+from pathlib import Path
+
+import streamlit as st
 
 st.set_page_config(
     page_title="Logs Viewer - Proxy Dashboard",

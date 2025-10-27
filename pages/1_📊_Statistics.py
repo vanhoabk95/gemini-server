@@ -4,13 +4,14 @@ Statistics Page - Request Statistics Dashboard
 Displays detailed statistics about proxy requests with interactive charts.
 """
 
-import streamlit as st
 import json
+from datetime import datetime
 from pathlib import Path
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime
+import streamlit as st
 
 st.set_page_config(
     page_title="Statistics - Proxy Dashboard",

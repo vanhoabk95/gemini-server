@@ -5,11 +5,24 @@ This is the main page of the Streamlit dashboard for monitoring and managing
 the proxy server. Use the sidebar to navigate to different pages.
 """
 
-import streamlit as st
+import sys
+import os
+
+# Add parent directory to path FIRST
+sys.path.insert(0, os.path.abspath('.'))
+
 import json
+import socket
 from pathlib import Path
 from datetime import datetime
-import os
+
+import streamlit as st
+
+try:
+    from proxy.gemini_usage_tracker import get_today_usage
+    TRACKER_AVAILABLE = True
+except ImportError:
+    TRACKER_AVAILABLE = False
 
 # Page config
 st.set_page_config(
@@ -85,10 +98,6 @@ def load_gemini_config():
 
 def check_server_running():
     """Check if proxy server is running by testing port connectivity."""
-    import socket
-
-    # Try multiple methods to detect if server is running
-
     # Method 1: Try to connect to the proxy port
     try:
         proxy_config = load_proxy_config()
@@ -195,16 +204,6 @@ with col_left:
 with col_right:
     st.subheader("🤖 Gemini API Status")
     if gemini_config:
-        # Import tracker here to avoid import at top level
-        try:
-            import sys
-            import os
-            sys.path.insert(0, os.path.abspath('.'))
-            from proxy.gemini_usage_tracker import get_today_usage
-            tracker_available = True
-        except:
-            tracker_available = False
-
         if isinstance(gemini_config, list):
             configs = gemini_config
         elif isinstance(gemini_config, dict) and 'configs' in gemini_config:
@@ -225,7 +224,7 @@ with col_right:
             st.metric("🔴 Failed", failed)
 
         # Daily usage
-        if tracker_available:
+        if TRACKER_AVAILABLE:
             st.markdown("**Today's Usage:**")
             for idx, cfg in enumerate(configs):
                 today_usage = get_today_usage(idx)

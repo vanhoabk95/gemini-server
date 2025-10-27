@@ -4,9 +4,10 @@ Settings Page - Proxy Configuration Editor
 Edit proxy server configuration settings.
 """
 
-import streamlit as st
 import json
 from pathlib import Path
+
+import streamlit as st
 
 st.set_page_config(
     page_title="Settings - Proxy Dashboard",
