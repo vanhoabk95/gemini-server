@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 
 from proxy.logger import get_logger
 from proxy.gemini_config import get_gemini_config
+from proxy.gemini_usage_tracker import track_request
 
 logger = get_logger()
 
@@ -240,6 +241,10 @@ async def _forward_to_google(method, path, headers, body, config):
                 if response.status_code == 200:
                     # Success - update status to healthy
                     config.update_status(status='healthy', error_message=None)
+
+                    # Track successful request
+                    track_request(config.get_current_index(), success=True)
+
                     logger.info(f"Response: {response.status_code} - {len(response.content)} bytes")
                     response_data = _build_http_response(
                         response.status_code,
@@ -260,6 +265,9 @@ async def _forward_to_google(method, path, headers, body, config):
                 else:
                     config.update_status(status='failed', error_message=f"API error: {response.status_code}")
 
+                # Track failed request
+                track_request(config.get_current_index(), success=False)
+
                 # Raise exception to trigger retry with next config
                 raise Exception(f"API error: {response.status_code}")
 
@@ -274,6 +282,11 @@ async def _forward_to_google(method, path, headers, body, config):
                 config.update_status(status='connection_error', error_message=str(e))
             else:
                 config.update_status(status='failed', error_message=str(e))
+
+            # Track failed request (only if not already tracked)
+            # Check if exception is from our own raise above (already tracked)
+            if 'API error:' not in str(e):
+                track_request(config.get_current_index(), success=False)
 
             # Increment retry counter
             retry_count += 1

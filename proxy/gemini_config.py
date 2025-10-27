@@ -108,6 +108,12 @@ class GeminiConfig:
                     cfg['last_check'] = None
                 if 'error_message' not in cfg:
                     cfg['error_message'] = None
+                # Initialize daily_limit if not present
+                if 'daily_limit' not in cfg:
+                    cfg['daily_limit'] = 1000
+                # Ensure daily_limit is valid
+                if not isinstance(cfg['daily_limit'], (int, float)) or cfg['daily_limit'] < 0:
+                    cfg['daily_limit'] = 1000
                 valid_configs.append(cfg)
 
         self.configs = valid_configs
@@ -150,6 +156,26 @@ class GeminiConfig:
         """Get Google API base URL from current config."""
         cfg = self.get_current_config()
         return cfg.get('api_base', self.DEFAULT_API_BASE) if cfg else self.DEFAULT_API_BASE
+
+    def get_daily_limit(self, index=None):
+        """
+        Get daily request limit from a config.
+
+        Args:
+            index (int, optional): Config index. If None, uses current_index
+
+        Returns:
+            int: Daily limit (default: 1000)
+        """
+        if index is None:
+            cfg = self.get_current_config()
+        else:
+            if 0 <= index < len(self.configs):
+                cfg = self.configs[index]
+            else:
+                cfg = None
+
+        return cfg.get('daily_limit', 1000) if cfg else 1000
 
     def rotate_to_next(self):
         """
