@@ -1,111 +1,151 @@
-# Simple Python Proxy Server
+# Gemini API Gateway
 
-A lightweight HTTP/HTTPS proxy server implemented in Python using only standard libraries.
-
-## Overview
-
-This proxy server accepts HTTP and HTTPS requests on a specified port and forwards them to the appropriate destination. It's designed to run on a PC and allow other machines within the LAN network to route web traffic through it.
+A lightweight proxy server for Google Gemini API with centralized key management, automatic failover, and real-time monitoring.
 
 ## Features
 
-### HTTP/HTTPS Proxy
-- Configurable listening IP address and port
-- Support for both HTTP and HTTPS (via CONNECT method)
-- Multithreaded request handling for concurrent connections
-- Detailed logging of all transactions
-- Command-line configuration options
-- Lightweight and easy to modify
+- 🔑 **Centralized API Key Management** - Store keys securely on server
+- 🔄 **Automatic Failover** - Multiple API keys with auto-switching
+- 📊 **Real-time Dashboard** - Monitor usage, stats, and configurations
+- 🔥 **Hot Reload** - Update API keys without server restart
+- 📈 **Usage Tracking** - 30-day history per API key
+- 🚀 **LangChain Compatible** - Works with AI frameworks
 
-### Gemini API Proxy (NEW)
-- Proxy Google Generative AI requests for clients without internet
-- Centralized API key management on server
-- Automatic model name replacement
-- Compatible with LangChain and other frameworks
-- Runs on the same port as HTTP/HTTPS proxy
-- See [GEMINI_SETUP.md](GEMINI_SETUP.md) for detailed setup instructions
+## Quick Start
 
-## Usage
+### 1. Install Dependencies
 
-### Quick Start - HTTP/HTTPS Proxy
+```bash
+# Using pip
+pip install httpx streamlit pandas plotly
 
-Start the proxy server with default settings:
+# Or using uv
+uv sync
+```
+
+### 2. Start Server
 
 ```bash
 python main.py
 ```
 
-Configure the proxy server with command line arguments:
+Server starts on port 80 by default.
+
+### 3. Start Dashboard (Optional)
 
 ```bash
-python main.py --host 0.0.0.0 --port 8888 --max-connections 50 --log-level INFO
+streamlit run dashboard.py
 ```
 
-### Quick Start - Gemini API Proxy
+Access at `http://localhost:8501` to:
+- Add/Edit/Delete API configurations
+- Monitor usage and statistics
+- View logs and errors
 
-1. Install httpx: `pip install httpx`
-2. Copy config file: `copy gemini_config.json.example gemini_config.json`
-3. Edit `gemini_config.json` and add your Google API key
-4. Start server: `python main.py`
-5. Configure client to point to `http://your-server-ip:80`
+### 4. Configure API Keys
 
-For detailed instructions, see [GEMINI_SETUP.md](GEMINI_SETUP.md)
+**Via Dashboard** (Recommended):
+1. Open `http://localhost:8501`
+2. Click "Add New Configuration"
+3. Enter your Google API key
+4. Set model and daily limit
 
-### Client Configuration
+**Via Config File**:
+Create/edit `gemini_config.json`:
 
-To use this proxy server in your LAN, configure your client devices as follows:
+```json
+{
+  "configs": [
+    {
+      "api_key": "YOUR_GOOGLE_API_KEY",
+      "model": "gemini-2.0-flash-exp",
+      "daily_limit": 1000
+    }
+  ]
+}
+```
 
-#### For Browsers (Chrome, Firefox, etc.)
-1. Go to browser settings
-2. Find proxy settings (usually under Network or Advanced settings)
-3. Enter your proxy server's IP address and port
+Get API keys at [Google AI Studio](https://aistudio.google.com/app/apikey)
 
-#### For System-wide Settings (Windows)
-1. Open Settings > Network & Internet > Proxy
-2. Enable "Manual proxy setup"
-3. Enter your proxy server's IP address and port
+### 5. Use in Your App
 
-#### For System-wide Settings (macOS)
-1. Open System Preferences > Network > Advanced > Proxies
-2. Check "Web Proxy (HTTP)" and "Secure Web Proxy (HTTPS)"
-3. Enter your proxy server's IP address and port for both
+```python
+from langchain_google_genai import ChatGoogleGenerativeAI
 
-## How It Works
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.0-flash-exp",
+    api_key="dummy-key",  # Gateway handles real keys
+    base_url="http://your-server-ip:80/v1beta"
+)
 
-### HTTP Proxying
-For HTTP requests, the proxy forwards the request to the target server and relays the response back to the client.
+response = llm.invoke("Hello!")
+print(response.content)
+```
 
-### HTTPS Proxying
-For HTTPS requests:
-1. Client sends a CONNECT request to establish a tunnel
-2. Proxy creates a connection to the target server
-3. Proxy returns a "200 Connection Established" response to the client
-4. Client and target server perform SSL/TLS handshake through the proxy tunnel
-5. Proxy forwards encrypted data in both directions without interpreting it
+## Configuration Files
 
-## Configuration
+**`proxy_config.json`** - Server settings:
+```json
+{
+  "host": "0.0.0.0",
+  "port": 80,
+  "log_level": "INFO"
+}
+```
 
-The proxy server can be configured using command-line arguments:
+**`gemini_config.json`** - API configurations (managed via dashboard or manually)
 
-- `--host`: IP address to bind to (default: 0.0.0.0)
-- `--port`: Port to listen on (default: 8888)
-- `--max-connections`: Maximum number of concurrent connections (default: 20)
-- `--log-level`: Logging level (default: INFO)
+## Running as Windows Service
 
-## Requirements
+Install as auto-start service:
 
-- Python 3.9 or higher
-- No external dependencies for basic HTTP/HTTPS proxy (uses only Python standard libraries)
-- For Gemini API Proxy feature: `httpx` library (install with `pip install httpx`)
+```bash
+# Install service (as admin)
+install_service.bat
+
+# Start service
+net start ProxyServer
+net start ProxyDashboard
+```
+
+Manage via `services.msc` or `manage_service.bat`
 
 ## Project Structure
 
-- `proxy/`: Core proxy server implementation
-  - `server.py`: Server module for listening and accepting connections
-  - `handler.py`: Client handler module for processing requests
-  - `forwarder.py`: Forwarding module for communicating with target servers
-  - `gemini_config.py`: Gemini API configuration module
-  - `gemini_handler.py`: Gemini API request handler
-  - `logger.py`: Logging module for monitoring and troubleshooting
-- `main.py`: Entry point for the application
-- `gemini_config.json.example`: Example configuration for Gemini API proxy
-- `GEMINI_SETUP.md`: Detailed setup guide for Gemini API proxy feature 
+```
+├── main.py              # Server entry point
+├── dashboard.py         # Web dashboard
+├── proxy/              # Core modules
+│   ├── gemini_handler.py      # API request handler
+│   ├── gemini_config.py       # Config management
+│   ├── gemini_usage_tracker.py # Usage tracking
+│   └── request_stats.py       # Statistics
+└── logs/               # Server logs
+```
+
+## Troubleshooting
+
+**Server not starting:**
+- Check port 80 is available
+- Run with admin rights (port 80 requires it)
+- Check logs in `logs/proxy_server.log`
+
+**API requests failing:**
+- Verify API keys in dashboard
+- Check daily limits not exceeded
+- Review error messages in dashboard
+
+**Dashboard not loading:**
+- Install: `pip install streamlit pandas plotly`
+- Start: `streamlit run dashboard.py`
+
+## Security Notes
+
+- ⚠️ Keep `gemini_config.json` private (gitignored)
+- ⚠️ Use in trusted networks only
+- ✅ API keys never leave the server
+- ✅ Clients use dummy credentials
+
+## License
+
+MIT - Educational and development purposes.

@@ -18,7 +18,7 @@ class RequestStats:
 
     Tracks requests per IP address including:
     - Total requests count
-    - Request types (HTTP, HTTPS, Gemini)
+    - Request types (Gemini only)
     - Success/failure counts
     - First and last seen timestamps
     """
@@ -39,8 +39,6 @@ class RequestStats:
         self.stats = defaultdict(lambda: {
             'total_requests': 0,
             'gemini_requests': 0,
-            'http_requests': 0,
-            'https_requests': 0,
             'first_seen': None,
             'last_seen': None,
             'success_count': 0,
@@ -84,13 +82,13 @@ class RequestStats:
         # Final save
         await self.save_to_file()
 
-    async def track_request(self, ip_address, request_type='http', success=True):
+    async def track_request(self, ip_address, request_type='gemini', success=True):
         """
         Track a single request.
 
         Args:
             ip_address (str): Client IP address
-            request_type (str): Type of request ('http', 'https', 'gemini')
+            request_type (str): Type of request ('gemini' only)
             success (bool): Whether the request was successful
         """
         if not self._enabled:
@@ -103,13 +101,8 @@ class RequestStats:
             ip_stats = self.stats[ip_address]
             ip_stats['total_requests'] += 1
 
-            # Track request type
-            if request_type.lower() == 'gemini':
-                ip_stats['gemini_requests'] += 1
-            elif request_type.lower() == 'https':
-                ip_stats['https_requests'] += 1
-            else:
-                ip_stats['http_requests'] += 1
+            # Track request type (all requests are Gemini now)
+            ip_stats['gemini_requests'] += 1
 
             # Track success/failure
             if success:

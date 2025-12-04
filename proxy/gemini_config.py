@@ -29,11 +29,17 @@ class GeminiConfig:
         self.current_index = 0  # Current active config index
         self.enabled = False
         self.config_file_path = None  # Store config file path for saving
+        self.last_file_mtime = None  # Track last modification time for auto-reload
 
         # Load from config file if provided
         if config_file and Path(config_file).exists():
             self.config_file_path = config_file
             self._load_from_file(config_file)
+            # Track file modification time
+            try:
+                self.last_file_mtime = Path(config_file).stat().st_mtime
+            except:
+                pass
 
         # Override with environment variables if set
         self._load_from_env()
@@ -79,7 +85,7 @@ class GeminiConfig:
         # If env vars are set, add as a config
         if env_api_key:
             env_config = {
-                'google_api_key': env_api_key,
+                'api_key': env_api_key,
                 'model': env_model or self.DEFAULT_MODEL,
                 'api_base': env_api_base or self.DEFAULT_API_BASE,
                 'enabled': True
@@ -95,7 +101,7 @@ class GeminiConfig:
         # Filter out invalid configs (no API key)
         valid_configs = []
         for cfg in self.configs:
-            if cfg.get('google_api_key'):
+            if cfg.get('api_key'):
                 # Set defaults for missing fields
                 if 'model' not in cfg:
                     cfg['model'] = self.DEFAULT_MODEL
@@ -145,7 +151,7 @@ class GeminiConfig:
     def get_api_key(self):
         """Get Google API key from current config."""
         cfg = self.get_current_config()
-        return cfg['google_api_key'] if cfg else None
+        return cfg.get('api_key') if cfg else None
 
     def get_model(self):
         """Get Gemini model name from current config."""
@@ -249,6 +255,9 @@ class GeminiConfig:
     def save_to_file(self, file_path=None):
         """
         Save current configuration (including status) back to JSON file.
+        
+        This method intelligently merges status updates with the current file content
+        to avoid overwriting manually edited fields like api_key, model, or daily_limit.
 
         Args:
             file_path (str, optional): Path to save to. If None, uses original config_file_path
@@ -266,8 +275,59 @@ class GeminiConfig:
             return False
 
         try:
+            # Read current file content to preserve manual edits
+            file_configs = []
+            if Path(save_path).exists():
+                try:
+                    with open(save_path, 'r', encoding='utf-8') as f:
+                        file_data = json.load(f)
+                    
+                    # Parse file data (same logic as _load_from_file)
+                    if isinstance(file_data, list):
+                        file_configs = file_data
+                    elif isinstance(file_data, dict) and 'configs' in file_data:
+                        file_configs = file_data['configs']
+                    elif isinstance(file_data, dict):
+                        file_configs = [file_data]
+                except Exception as read_error:
+                    # If we can't read the file, fall back to saving our in-memory config
+                    try:
+                        from proxy.logger import get_logger
+                        logger = get_logger()
+                        logger.warning(f"Could not read config file for merge: {read_error}, using in-memory config")
+                    except:
+                        print(f"WARNING: Could not read config file for merge: {read_error}")
+                    file_configs = []
+
+            # Merge: preserve file config fields, only update status fields from memory
+            merged_configs = []
+            for idx, mem_cfg in enumerate(self.configs):
+                if idx < len(file_configs):
+                    # Start with file config to preserve manual edits
+                    merged = file_configs[idx].copy()
+                    
+                    # Only update status-related fields from memory
+                    merged['status'] = mem_cfg.get('status', 'unknown')
+                    merged['last_check'] = mem_cfg.get('last_check')
+                    merged['error_message'] = mem_cfg.get('error_message')
+                    
+                    merged_configs.append(merged)
+                else:
+                    # New config added in memory that doesn't exist in file
+                    merged_configs.append(mem_cfg)
+            
+            # If file has more configs than memory, preserve them
+            if len(file_configs) > len(self.configs):
+                for idx in range(len(self.configs), len(file_configs)):
+                    merged_configs.append(file_configs[idx])
+
+            # Save merged data
+            output_data = {
+                "configs": merged_configs
+            }
+
             with open(save_path, 'w', encoding='utf-8') as f:
-                json.dump(self.configs, f, indent=2, ensure_ascii=False)
+                json.dump(output_data, f, indent=2, ensure_ascii=False)
 
             # Log success if logger available
             try:
@@ -310,13 +370,87 @@ class GeminiConfig:
             }
         return None
 
+    def reload_from_file(self):
+        """
+        Reload configuration from file, preserving status information.
+        This allows hot-reloading of API keys and other settings without server restart.
+        
+        Returns:
+            bool: True if config was reloaded, False otherwise
+        """
+        if not self.config_file_path or not Path(self.config_file_path).exists():
+            return False
+        
+        try:
+            # Save current status information
+            status_backup = []
+            for cfg in self.configs:
+                status_backup.append({
+                    'status': cfg.get('status', 'unknown'),
+                    'last_check': cfg.get('last_check'),
+                    'error_message': cfg.get('error_message')
+                })
+            
+            # Reload from file
+            self._load_from_file(self.config_file_path)
+            self._validate()
+            
+            # Restore status information for configs that still exist
+            for idx in range(min(len(self.configs), len(status_backup))):
+                self.configs[idx]['status'] = status_backup[idx]['status']
+                self.configs[idx]['last_check'] = status_backup[idx]['last_check']
+                self.configs[idx]['error_message'] = status_backup[idx]['error_message']
+            
+            # Update last modification time
+            try:
+                self.last_file_mtime = Path(self.config_file_path).stat().st_mtime
+            except:
+                pass
+            
+            # Log reload
+            try:
+                from proxy.logger import get_logger
+                logger = get_logger()
+                logger.info(f"Config reloaded from {self.config_file_path}")
+            except:
+                print(f"Config reloaded from {self.config_file_path}")
+            
+            return True
+        except Exception as e:
+            try:
+                from proxy.logger import get_logger
+                logger = get_logger()
+                logger.error(f"Error reloading config: {e}")
+            except:
+                print(f"Error reloading config: {e}")
+            return False
+    
+    def check_and_reload(self):
+        """
+        Check if config file has been modified and reload if needed.
+        
+        Returns:
+            bool: True if config was reloaded, False otherwise
+        """
+        if not self.config_file_path or not Path(self.config_file_path).exists():
+            return False
+        
+        try:
+            current_mtime = Path(self.config_file_path).stat().st_mtime
+            if self.last_file_mtime is None or current_mtime > self.last_file_mtime:
+                return self.reload_from_file()
+        except Exception as e:
+            pass
+        
+        return False
+
     def __str__(self):
         """String representation of config."""
         if not self.is_enabled():
             return "Gemini Proxy Config: Disabled"
 
         cfg = self.get_current_config()
-        api_key = cfg.get('google_api_key', '')
+        api_key = cfg.get('api_key', '')
         masked_key = '***' + api_key[-4:] if api_key and len(api_key) > 4 else 'Not set'
 
         status_info = self.get_status()
@@ -342,12 +476,14 @@ class GeminiConfig:
 _gemini_config = None
 
 
-def get_gemini_config(config_file=None):
+def get_gemini_config(config_file=None, auto_reload=True):
     """
     Get or create the global Gemini configuration instance.
+    Automatically reloads config if file has been modified.
 
     Args:
         config_file (str, optional): Path to config file
+        auto_reload (bool): Whether to automatically reload if file changed (default: True)
 
     Returns:
         GeminiConfig: The global configuration instance
@@ -370,5 +506,8 @@ def get_gemini_config(config_file=None):
                     break
 
         _gemini_config = GeminiConfig(config_path)
+    elif auto_reload:
+        # Check if config file has been modified and reload if needed
+        _gemini_config.check_and_reload()
 
     return _gemini_config

@@ -1,13 +1,13 @@
 """
-Client handler module for the proxy server.
+Client handler module for the Gemini API gateway.
 
-This module handles client connections and processes HTTP requests asynchronously.
+This module handles client connections and processes Gemini API requests asynchronously.
+Non-Gemini requests are silently closed.
 """
 
 import asyncio
 
 from proxy.logger import get_logger
-from proxy.forwarder import forward_request
 from proxy.gemini_handler import is_gemini_request, handle_gemini_request
 from proxy.request_stats import get_request_stats_sync
 
@@ -28,7 +28,7 @@ async def handle_client(reader, writer):
     """
     client_address = writer.get_extra_info('peername')
     ip_address = client_address[0] if client_address else 'unknown'
-    request_type = 'http'
+    request_type = None
     success = False
 
     try:
@@ -45,26 +45,10 @@ async def handle_client(reader, writer):
             request_type = 'gemini'
             success = await handle_gemini_request(writer, request_data, client_address)
         else:
-            # Detect HTTPS (CONNECT method)
-            if request_data.startswith(b'CONNECT '):
-                request_type = 'https'
-
-            # Forward the request to the target server (normal HTTP/HTTPS proxy)
-            success = await forward_request(reader, writer, request_data, client_address)
-
-        if not success:
-            # Send error response to the client
-            error_response = (
-                b"HTTP/1.1 502 Bad Gateway\r\n"
-                b"Content-Type: text/html\r\n"
-                b"Connection: close\r\n"
-                b"\r\n"
-                b"<html><body><h1>502 Bad Gateway</h1>"
-                b"<p>The proxy server could not handle the request.</p>"
-                b"</body></html>"
-            )
-            writer.write(error_response)
-            await writer.drain()
+            # Non-Gemini request: close connection silently
+            logger.info(f"Non-Gemini request from {ip_address}, closing connection silently")
+            await _close_connection(writer)
+            return
 
     except asyncio.TimeoutError:
         logger.warning(f"Client connection timed out: {ip_address}")
